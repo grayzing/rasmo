@@ -1,7 +1,7 @@
 # GraphDQN for optimization of Energy Efficiency in 5G O-RAN
 
 ## Background
-Graph structure is inherent to this problem. At time $t$, we have $K$ UEs distributed across $N$ base stations. For other models, e.g., Wang et. al, Ntassah et. al, and more, $K$ is constant across $t$, i.e., the models can't handle dynamic $K$ or $N$, thus aren't generalizable. 
+Graph structure is inherent to this problem. At time $t$, we have $K$ UEs distributed across $N$ base stations. For other models, e.g., Wang et. al, Ntassah et. al, and more, $K$ is constant across $t$, i.e., the models can't handle dynamic $K$ or $N$, thus need to be retrained for any changes.
 
 We can model the RANs as a weighted bipartite graph $G=(V,E)$, with edges between RUs and UEs. The weights would be throughput. From here, we can use a Graph Convolutional Network to assign Q-values to each RU, and use $\text{stoch arg max}$ to get a high Q-value.
 
@@ -32,3 +32,9 @@ The DQN makes use of the graph structure inherent to this problem. At time $t$, 
 ```
 
 where $B_\text{prb}$ is the bandwidth of one PRB. Additionally, we define the node feature vector $\mathbf{X}\in \mathbb{R}^{|V|+1\times 1}$, as mentioned in the last section.
+
+## Simulation
+The model is validated in a UMa scenario with eMBB traffic type, i.e., hexagonal grid, 19 macro sites, BS antenna height 25m, 80% of UEs indoors.
+
+ The SLS was designed and implemented according to specifications in [Pedersen et. al](https://ieeexplore.ieee.org/document/10482909).
+
