@@ -1,55 +1,60 @@
-from torch import nn, optim
-import torch
+
 from torch_geometric import torch_geometric
 from collections import deque
-import random
-import copy
-import scheduler
-import datetime
-import pandas as pd
+from simulation import Simulation
 
-class GraphDQN(nn.Module):
-    def __init__(self) -> None:
-        super(GraphDQN, self).__init__()
-        self.device: torch.accelerator = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu" # type: ignore
-        hidden_size = 8
-        self.loss: nn.MSELoss = nn.MSELoss() 
-        self.fc1: torch_geometric.nn.DenseGCNConv = torch_geometric.nn.DenseGCNConv(2, hidden_size)
-        self.fc2: torch_geometric.nn.DenseGCNConv = torch_geometric.nn.DenseGCNConv(hidden_size, hidden_size)
-        self.fc3: torch_geometric.nn.DenseGCNConv = torch_geometric.nn.DenseGCNConv(hidden_size, hidden_size)
-        self.fcq: torch_geometric.nn.DenseGCNConv = torch_geometric.nn.DenseGCNConv(hidden_size, 1)
-        
-        
-    def forward(self, x: torch.Tensor, e: torch.Tensor):
-        x = torch.relu(self.fc1(x, e))
-        x = torch.relu(self.fc2(x))
-        x = torch.relu(self.fc3(x))
-        x = self.fcq(x, e)
+import torch
+
+class Critic(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        hidden_size = 16
+        self.conv1 = torch_geometric.nn.GCNConv(4, hidden_size)
+        self.conv2 = torch_geometric.nn.GCNConv(hidden_size,hidden_size)
+        self.conv3 = torch_geometric.nn.GCNConv(hidden_size, 1)
+
+    def forward(self, edges: torch.Tensor, weights: torch.Tensor, vertex_features: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(vertex_features, edges, weights)
+        x = torch.relu(x)
+
+        x = self.conv2(vertex_features, edges, weights)
+        x = torch.relu(x)
+
+        x = self.conv3(vertex_features, edges, weights)
+        x = torch.relu(x)
+
+        q_value = torch_geometric.nn.global_mean_pool.global_mean_pool(x, torch.tensor(len(vertex_features)))
+
+        return q_value
+
+class Actor(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        hidden_size = 16
+        self.conv1 = torch_geometric.nn.GCNConv(4, hidden_size)
+        self.conv2 = torch_geometric.nn.GCNConv(hidden_size,hidden_size)
+        self.conv3 = torch_geometric.nn.GCNConv(hidden_size, 1)
+
+    def forward(self, edges: torch.Tensor, weights: torch.Tensor, vertex_features: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(vertex_features, edges, weights)
+        x = torch.relu(x)
+
+        x = self.conv2(vertex_features, edges, weights)
+        x = torch.relu(x)
+
+        x = self.conv3(vertex_features, edges, weights)
+        x = torch.relu(x)
+
         return x
     
-class ReplayBuffer:
-    def __init__(self, buffer_size):
-        self.buffer_size = buffer_size
-        self.buffer = deque(maxlen=buffer_size)
-        torch.set_printoptions(threshold=10000)
-        
-    def add(self,experience):
-        self.buffer.append(experience)
-        
-    def __sizeof__(self) -> int:
-        return len(self.buffer)
-        
-    def sample(self, batch_size):
-        assert self.can_sample(batch_size)
-        transitions = random.sample(self.buffer, batch_size)
-        state_b, action_b, reward_b, next_state_b = zip(*transitions)
+class A2CAgent(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.actor = Actor()
+        self.critic = Critic()
+
+    def forward(self, vertex_embeddings: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor):
+        policy = self.actor(vertex_embeddings, edges, weights)
+        value = self.critic(vertex_embeddings, edges, weights)
+
     
-        state_b = torch.stack(state_b)                           # (batch, state_dim)
-        action_b = torch.stack(action_b).long().unsqueeze(1)     # (batch, 1)
-        reward_b = torch.stack(reward_b).float().unsqueeze(1)    # (batch, 1)
-        next_state_b = torch.stack(next_state_b)                 # (batch, state_dim)
-        
-        return state_b, action_b, reward_b, next_state_b
-                    
-    def can_sample(self, batch_size)->bool:
-        return len(self.buffer) >= batch_size * 10

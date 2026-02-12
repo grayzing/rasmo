@@ -1,4 +1,4 @@
-GRAPHICAL_SCALING_FACTOR = 1.65
+GRAPHICAL_SCALING_FACTOR = 0.65
 
 UE_IMAGE: str = "images/ue.gif"
 RU_IMAGE: str = "images/ru.gif"

@@ -10,6 +10,8 @@ class Vector:
         self.z = z
 
 c = 3e8 / 10e3 # Speed of light
+se_table = [0.15, 0.23, 0.38, 0.6, 0.88, 1.18, 1.48, 1.91, 
+                    2.41, 2.73, 3.32, 3.9, 4.52, 5.12, 5.55]
 
 def euclidean_distance(u: Vector, v: Vector) -> float:
     """
@@ -98,6 +100,9 @@ def path_loss_nlos(u: Vector, v: Vector, frequency: float) -> float:
 def los_probability(u: Vector, v: Vector) -> float:
     distance_2d: float = euclidean_distance_2d(u,v)
     return min(18/distance_2d, 1.0) * (1 - np.exp(-distance_2d/36)) + np.exp(-distance_2d/36)
+
+def sinr(u: Vector, v: Vector, frequency: float) -> float:
+    return 46 - path_loss_los(u,v,frequency) - (-174 + 10*np.log10(20e6))
 
 def rsrp(u: Vector, v: Vector, frequency: float, tx_power: float) -> float:
     return tx_power - path_loss_nlos(u,v,frequency)
