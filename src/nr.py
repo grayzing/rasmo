@@ -11,7 +11,7 @@ class AdvancedSleepMode(Enum):
     SM2 = (0.5, 1, 1)
     SM3 = (5, 10, 2)
     SM4 = (500, 1000, 3)
-    ACTIVE = (505.6, 1011, 4)
+    ACTIVE = (0, 0, 4)
 
 class AsmTransitionState(Enum):
     NONE = 0

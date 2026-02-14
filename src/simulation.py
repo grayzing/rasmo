@@ -77,6 +77,8 @@ class Event:
             self.parent.schedule_event(advanced_sleep_mode.value[1], ActionType.AdvancedSleepModeTransitionEnd, args={
                 "target_gnb": target_gnb
             })
+
+            print("Switched ASM of gNB with ID ", target_gnb.cell_id, " to ASM ", advanced_sleep_mode)
         elif self.action == ActionType.AdvancedSleepModeTransitionEnd:
             assert self.args
 
@@ -87,7 +89,7 @@ class Event:
             
             target_gnb.allocate()
         
-        print("Executed event with ActionType ", self.action, " at time ", self.execution_time)
+        print("Executed event with ActionType", self.action, "at time ", self.execution_time)
 
 
 class Simulation:
@@ -187,7 +189,7 @@ class Simulation:
         if target_gnb.radio_unit.asm_transition_state != AsmTransitionState.NONE:
             warn("Tried to change ASM of gNB while it was in ASM transition")
             return
-        tte = advanced_sleep_mode.value[0]
+        tte = advanced_sleep_mode.value[0] + target_gnb.radio_unit.advanced_sleep_mode.value[0] # Time To Execute should include the time it takes to transition to the desired ASM as well as leave the gNB's previous ASM.
         target_gnb.radio_unit.asm_transition_state = AsmTransitionState.TRAN
         
         self.schedule_event(tte, ActionType.AdvancedSleepModeAdjust, args={
@@ -236,7 +238,7 @@ class Simulation:
 
     def get_best_gnb(self, ue: NrUe) -> NrGnb | None:
         """
-        Get best gNB for the UE to handover to
+        Get best gNB for the UE to handover to, based on RSRP
         
         :param ue: UE to handover
         :type ue: NrUe

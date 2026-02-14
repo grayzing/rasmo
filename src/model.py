@@ -7,6 +7,7 @@ from nr import AdvancedSleepMode
 from enum import Enum
 
 import torch
+import pandas as pd
 
 def AdvancedSleepModeIntMapping(x) -> AdvancedSleepMode:
     assert x >= 0 and x <= 4
@@ -92,6 +93,12 @@ class Actor(torch.nn.Module):
 
 class A2CAgent:
     def __init__(self, num_gnbs: int) -> None:
+        """
+        Initialize Advantage Actor Critic agent.
+        
+        :param num_gnbs: Number of gNBs in the system.
+        :type num_gnbs: int
+        """
         self.actor = Actor()
         self.critic = Critic()
 
@@ -102,9 +109,19 @@ class A2CAgent:
         self.critic_optimizer: torch.optim.Adam = torch.optim.Adam(self.critic.parameters())
 
         self.num_gnbs = num_gnbs
-        self.gamma = 10e-3
+        self.gamma = 0.99 # Discount factor
 
     def td(self, reward: float, value: float) -> torch.Tensor:
+        """
+        Calculate TD
+        
+        :param reward: Reward at time t
+        :type reward: float
+        :param value: Value function approximation of reward
+        :type value: float
+        :return: TD
+        :rtype: Tensor
+        """
         return torch.tensor(reward + self.gamma * value)
 
     def train(self, episodes: int = 1000, steps_per_episode: int = 100_000_00):
@@ -137,6 +154,7 @@ class A2CAgent:
                         simulation.step()
 
                     reward = simulation.reward()
+                    rewards.append(reward)
 
                     self.critic_optimizer.zero_grad()
                     value = self.critic(current_vertex_embeddings, current_edges, current_weights)
@@ -144,6 +162,7 @@ class A2CAgent:
                     td = self.td(reward, value)
 
                     critic_loss = self.critic_criterion(td, value)
+                    critic_losses.append(critic_loss.item())
                     critic_loss.backward()
 
                     self.critic_optimizer.step()
@@ -152,10 +171,22 @@ class A2CAgent:
                     entropy = -(policy * torch.log(action + 1e-10)).sum()
                     actor_loss = actor_loss - 0.01 * entropy 
 
+                    actor_losses.append(actor_loss.item())
+
                     actor_loss.backward()
                     
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
                     self.actor_optimizer.step()
+
+                    simulation.step()
+                    current_vertex_embeddings, current_edges, current_weights = simulation.get_state()
+
+        concat_data = {
+            t : [rewards[t], actor_losses[t], critic_losses[t]] for t in range(len(rewards))
+        }
+
+        data = pd.DataFrame(concat_data, ["Step", "Reward", "Actor Loss", "Critic Loss"])
+        data.to_csv("../data/results.csv")
 
                     
                     

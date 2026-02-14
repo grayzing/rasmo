@@ -5,9 +5,9 @@ Graph structure is inherent to this problem. At time $t$, we have $K$ UEs distri
 
 We can model the network as a graph $G^t=(V^t,E^t)$, where edge weights $w: V \times V \to \mathbb{R}$ is defined as the RSRP from gNB $u$ to UE $v$.
 
-$\mathbf{X} \in \mathbb{R}^{n\times4}$ is a feature vector with the geolocations of every node in the network, as well as the total throughput, in the case of the node being a gNB. If the node isn't a gNB, the total throughput is -1.
+$\mathbf{X} \in \mathbb{R}^{n\times6}$ is a feature vector with the geolocations of every node in the network, as well as the average throughput of connected UEs, advanced sleep mode of the gNB, and percentage of PRB utilization, in the case of the node being a gNB. If the node isn't a gNB, the throughput, ASM, and PRB utilization are $-1$.
 
-$\mathbf{H} \in \mathbb{R}^{n \times n}$ is the received power matrix, which encodes the RSRP between gNBs and UEs.
+$\mathbf{H} \in \mathbb{R}^{n \times n}$ is the received power matrix, which encodes the normalized RSRP between gNBs and UEs.
 
 ## Problem formulation
 We want to maximize the average throughput in the system as well as minimize the power usage in the system. A sleep mode function $S: \mathcal{R} \to \mathbb{Z}$ is defined as the advanced sleep mode of a given gNB. Average throughput is defined as 
