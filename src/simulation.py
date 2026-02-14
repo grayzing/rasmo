@@ -183,7 +183,8 @@ class Simulation:
         return feature_vector, edge_vector, weight_vector
 
     def schedule_event(self, time_to_execute: float, action: ActionType, args: dict | None = None) -> None:
-        self.queue.append(Event(self.time + time_to_execute, action, self, args))
+        event = Event(self.time + time_to_execute, action, self, args)
+        self.queue.append(event)
 
     def set_advanced_sleep_mode(self, target_gnb: NrGnb, advanced_sleep_mode: AdvancedSleepMode):
         if target_gnb.radio_unit.asm_transition_state != AsmTransitionState.NONE:
@@ -274,7 +275,10 @@ class Simulation:
         :return: The sum of the average RSRP, average throughput, and sum of all sleep modes in the system
         :rtype: float
         """
-        average_rsrp: float = sum(ue.rsrp() for ue in self.ues.values()) / len(self.ues)
+        connected_ues = [ue for ue in self.ues.values() if ue.serving_gnb]
+        average_rsrp = 0
+        if len(connected_ues) > 0:
+            average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / len([ue for ue in connected_ues])
         average_average_throughput: float = sum(ue.average_throughput for ue in self.ues.values()) / len(self.ues)
         sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values())
         return average_rsrp + average_average_throughput + sleep_mode_sum
@@ -333,6 +337,7 @@ class Simulation:
                     self.set_advanced_sleep_mode(gnb, AdvancedSleepMode.SM1)
 
         self.ue_connection_turtle.clear()
+        self.gnb_sleep_mode_turtle.clear()
         self.update_turtles()
         self.screen.update()
 
@@ -347,10 +352,8 @@ class Simulation:
                 print("Time step: ", time, "ms")
             
             self.step()
-
             time += self.delta
             self.time = time
-            #sleep(0.25)
 
 
     
