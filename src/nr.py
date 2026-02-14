@@ -34,9 +34,14 @@ class ProportionalFairScheduler:
         self.total_prbs = total_prbs
 
     def calculate_metric(self, ue: 'NrUe') -> float:
-        if ue.average_throughput <= 0:
-            return np.inf
+        """
+        Calculate PF metric for the given UE. 
         
+        :param ue: The UE to calculate the PF metric for.
+        :type ue: 'NrUe'
+        :return: The PF metric
+        :rtype: float
+        """
         return ue.instantaneous_rate / ue.average_throughput
     
     def schedule(self, ues: list['NrUe']) -> dict['NrUe', int]:
@@ -45,7 +50,9 @@ class ProportionalFairScheduler:
             if ue.instantaneous_rate > 0
         ]
 
-        if not active_users:
+        #print(active_users)
+
+        if len(active_users) < 1:
             return {}
         
         user_metrics = []
@@ -244,7 +251,7 @@ class NrUe:
         self.id: int = id
 
         self.average_throughput: float = 1.0
-        self.instantaneous_rate: float = 0
+        self.instantaneous_rate: float = 10e-6 # small number to prevent division by zero error
 
         self.assigned_prbs_history: list[float] = []
         self.throughput_history: list[float] = []
@@ -266,6 +273,7 @@ class NrUe:
 
     def update_instantaneous_rate(self) -> None:
         if not self.serving_gnb:
+            # print("No serving gnb")
             self.instantaneous_rate = -1
             return
         
@@ -283,7 +291,7 @@ class NrUe:
         bits_per_re = se  # bits per resource element
         re_per_prb = 12 * 14
         rate_per_prb = re_per_prb * bits_per_re * 1000  # per second
-
+        # print(rate_per_prb)
         self.instantaneous_rate = rate_per_prb
 
     def update_average_throughput(self, actual_rate: float, alpha: float, 

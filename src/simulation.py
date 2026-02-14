@@ -144,24 +144,30 @@ class Simulation:
         """
         n = len(self.ues)
         m = len(self.gnbs)
-        e: list[tuple[int,int]] = []
-        w: list[float] = [-np.inf for _ in range(m + n)]
-        v: list[list[float]] = [[0,0,0,0] for _ in range(m + n)]
+        source: list [int] = []
+        destination: list [int] = []
+        w: list[float] = []
+        v: list[list[float]] = [[0,0,0,0,0,0] for _ in range(m + n)]
 
         for gnb in self.gnbs.values():
-            v[gnb.cell_id] = [gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], gnb.ue_scheduler.total_prbs / sum(prb for prb in gnb.allocate().values()), sum(ue.average_throughput for ue in gnb.connected_ues) / len(gnb.connected_ues)]
+            prb_utilization = sum(prb for prb in gnb.allocate().values()) / gnb.ue_scheduler.total_prbs
+            average_throughput = 1
+            if len(gnb.connected_ues) > 0:
+                average_throughput = sum(ue.average_throughput for ue in gnb.connected_ues) / len(gnb.connected_ues)
+            v[gnb.cell_id] = [gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], prb_utilization, average_throughput]
             for ue in gnb.connected_ues:
-                e.append((gnb.cell_id, ue.id))
-                w[ue.id] = rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)
+                source.append(gnb.cell_id)
+                destination.append(ue.id)
+                w.append(rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)/-160)
 
         for ue in self.ues.values():
-            v[ue.id] = [ue.position.x, ue.position.y, ue.position.z, -1, -1, -1]
+            v[m + ue.id] = [ue.position.x, ue.position.y, ue.position.z, 1, 1, 1]
 
-        feature_vector: torch.Tensor = torch.tensor(v)
-        edge_vector: torch.Tensor = torch.Tensor(e)
-        weight_vector: torch.Tensor = torch.Tensor(w)
+        feature_vector: torch.Tensor = torch.tensor(v, dtype=torch.float32)
+        edge_vector: torch.Tensor = torch.tensor([source, destination], dtype=torch.int)
+        weight_vector: torch.Tensor = torch.tensor(w, dtype=torch.float32)
 
-        return feature_vector, edge_vector, weight_vector
+        return feature_vector, edge_vector.to(torch.int64), weight_vector
 
     def schedule_event(self, time_to_execute: float, action: ActionType, args: dict | None = None) -> None:
         self.queue.append(Event(self.time + time_to_execute, action, self, args))
@@ -192,16 +198,18 @@ class Simulation:
             self.gnbs[i] = NrGnb(0,0,25,25,i,self)
             self.gnbs[i].parent_scheduler = self
 
-            self.items.append(self.gnbs[i])
-
         for i in range(m):
             self.ues[i] = NrUe(0,0,1.5,0, 1.5, i, self)
             self.ues[i].parent_scheduler = self
 
+            if np.random.randint(0,2) == 0:
+                self.ues[i].velocity.x *= -1
+            
+            if np.random.randint(0,2) == 0:
+                self.ues[i].velocity.y *= -1
+
             self.ues[i].position.x = np.random.randint(-350, 350)
             self.ues[i].position.y = np.random.randint(-350, 350)
-
-            self.items.append(self.ues[i])
 
         self.gnbs[0].position = Vector(0,0,25)
 
@@ -283,11 +291,12 @@ class Simulation:
                     best_gnb.connected_ues.append(ue)
                     if self.energy_saving_strategy == GnbSleepModeStrategy.Naive and best_gnb.radio_unit.advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
                         self.set_advanced_sleep_mode(best_gnb, AdvancedSleepMode.ACTIVE)
-                    else:
-                        best_gnb.allocate()
-                    
-
                     print("Attach UE with ID ", ue.id, "to gNB with ID ", best_gnb.cell_id)
+
+        # Allocate PRBs for attached UEs
+        for gnb in self.gnbs.values():
+            gnb.allocate()
+            # print(alloc)
                         
 
         # Change UE position based on mobility model
@@ -297,15 +306,8 @@ class Simulation:
                 new_position_dx = ue.velocity.x * self.delta
                 new_position_dy = ue.velocity.y * self.delta
                 
-                if np.random.randint(0,2) == 0:
-                    new_position.x = ue.position.x + new_position_dx
-                else:
-                    new_position.x = ue.position.x - new_position_dx
-
-                if np.random.randint(0,2) == 0:
-                    new_position.y = ue.position.y + new_position_dy
-                else:
-                    new_position.y = ue.position.y - new_position_dy
+                new_position.x = ue.position.x + new_position_dx
+                new_position.y = ue.position.y + new_position_dy
 
                 ue.set_position(new_position)
 

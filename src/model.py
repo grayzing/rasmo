@@ -9,44 +9,44 @@ class Critic(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         hidden_size = 16
-        self.conv1 = torch_geometric.nn.GCNConv(4, hidden_size)
-        self.conv2 = torch_geometric.nn.GCNConv(hidden_size,hidden_size)
-        self.conv3 = torch_geometric.nn.GCNConv(hidden_size, 1)
+        self.convlayers: list[torch_geometric.nn.GCNConv] = [
+            torch_geometric.nn.GCNConv(-1,hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size,hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size, hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size, 1)
+        ]
 
-    def forward(self, edges: torch.Tensor, weights: torch.Tensor, vertex_features: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(vertex_features, edges, weights)
-        x = torch.relu(x)
+        self.lin = torch_geometric.nn.Linear(hidden_size,1)
 
-        x = self.conv2(vertex_features, edges, weights)
-        x = torch.relu(x)
+    def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
+        for layer in self.convlayers:
+            vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
+            vertex_features = torch.relu(vertex_features)
 
-        x = self.conv3(vertex_features, edges, weights)
-        x = torch.relu(x)
-
-        q_value = torch_geometric.nn.global_mean_pool.global_mean_pool(x, torch.tensor(len(vertex_features)))
-
-        return q_value
+        node_emb = torch_geometric.nn.pool.global_mean_pool(x=vertex_features, batch=None)
+        return node_emb
 
 class Actor(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        hidden_size = 16
-        self.conv1 = torch_geometric.nn.GCNConv(4, hidden_size)
-        self.conv2 = torch_geometric.nn.GCNConv(hidden_size,hidden_size)
-        self.conv3 = torch_geometric.nn.GCNConv(hidden_size, 1)
+        hidden_size = 64
+        self.convlayers: list[torch_geometric.nn.GCNConv] = [
+            torch_geometric.nn.GCNConv(6,hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size,hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size, hidden_size)
+        ]
 
-    def forward(self, edges: torch.Tensor, weights: torch.Tensor, vertex_features: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(vertex_features, edges, weights)
-        x = torch.relu(x)
+        self.lin = torch_geometric.nn.Linear(hidden_size,1)
 
-        x = self.conv2(vertex_features, edges, weights)
-        x = torch.relu(x)
+    def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
+        torch.autograd.set_detect_anomaly(True)
+        for layer in self.convlayers:
+            vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
+            vertex_features = torch.sigmoid(vertex_features)
 
-        x = self.conv3(vertex_features, edges, weights)
-        x = torch.relu(x)
+        node_emb: torch.Tensor = self.lin(vertex_features)
+        return torch.softmax(node_emb, 0)
 
-        return x
-    
 class A2CAgent(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
