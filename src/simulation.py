@@ -120,18 +120,29 @@ class Simulation:
         self.ue_connection_turtle.pencolor("blue")
         self.ue_connection_turtle.hideturtle()
 
-        self.simulation_statistics_turtle = turtle.Turtle()
-        self.simulation_statistics_turtle.speed(0)
-        self.simulation_statistics_turtle.penup()
-        self.simulation_statistics_turtle.hideturtle()
+        self.gnb_sleep_mode_turtle = turtle.Turtle()
+        self.gnb_sleep_mode_turtle.speed(0)
+        self.gnb_sleep_mode_turtle.penup()
+        self.gnb_sleep_mode_turtle.pencolor("green")
+        self.gnb_sleep_mode_turtle.hideturtle()
 
-    def update_component_connection_display(self):
+    def update_turtles(self):
         for ue in self.ues.values() :
             if ue.serving_gnb:
                 self.ue_connection_turtle.goto(ue.get_position().x/GRAPHICAL_SCALING_FACTOR, ue.get_position().y/GRAPHICAL_SCALING_FACTOR)
                 self.ue_connection_turtle.pendown()
                 self.ue_connection_turtle.goto(ue.serving_gnb.get_position().x/GRAPHICAL_SCALING_FACTOR, ue.serving_gnb.get_position().y/GRAPHICAL_SCALING_FACTOR)
                 self.ue_connection_turtle.penup()
+
+                self.ue_connection_turtle.goto(ue.get_position().x / GRAPHICAL_SCALING_FACTOR, ue.get_position().y / GRAPHICAL_SCALING_FACTOR)
+                self.ue_connection_turtle.write(ue.rsrp().__trunc__(), font=("Arial", 16, "normal"))
+
+                self.ue_connection_turtle.penup()
+        for gnb in self.gnbs.values():
+            self.gnb_sleep_mode_turtle.goto(gnb.get_position().x/GRAPHICAL_SCALING_FACTOR + 16, gnb.get_position().y/GRAPHICAL_SCALING_FACTOR + 16)
+            self.gnb_sleep_mode_turtle.pendown()
+            self.gnb_sleep_mode_turtle.write(gnb.radio_unit.advanced_sleep_mode.value[2], font=("Arial", 24, "normal"))
+            self.gnb_sleep_mode_turtle.penup()
 
     def get_state(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -147,27 +158,27 @@ class Simulation:
         source: list [int] = []
         destination: list [int] = []
         w: list[float] = []
-        v: list[list[float]] = [[0,0,0,0,0,0] for _ in range(m + n)]
+        v: list[list[float]] = []
 
         for gnb in self.gnbs.values():
             prb_utilization = sum(prb for prb in gnb.allocate().values()) / gnb.ue_scheduler.total_prbs
             average_throughput = 1
             if len(gnb.connected_ues) > 0:
                 average_throughput = sum(ue.average_throughput for ue in gnb.connected_ues) / len(gnb.connected_ues)
-            v[gnb.cell_id] = [gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], prb_utilization, average_throughput]
+            v.append([gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], prb_utilization, average_throughput])
             for ue in gnb.connected_ues:
                 source.append(gnb.cell_id)
                 destination.append(ue.id)
                 w.append(rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)/-160)
 
         for ue in self.ues.values():
-            v[m + ue.id] = [ue.position.x, ue.position.y, ue.position.z, 1, 1, 1]
+            v.append([ue.position.x, ue.position.y, ue.position.z, -1, -1, -1])
 
         feature_vector: torch.Tensor = torch.tensor(v, dtype=torch.float32)
         edge_vector: torch.Tensor = torch.tensor([source, destination], dtype=torch.int)
         weight_vector: torch.Tensor = torch.tensor(w, dtype=torch.float32)
 
-        return feature_vector, edge_vector.to(torch.int64), weight_vector
+        return feature_vector, edge_vector, weight_vector
 
     def schedule_event(self, time_to_execute: float, action: ActionType, args: dict | None = None) -> None:
         self.queue.append(Event(self.time + time_to_execute, action, self, args))
@@ -198,7 +209,7 @@ class Simulation:
             self.gnbs[i] = NrGnb(0,0,25,25,i,self)
             self.gnbs[i].parent_scheduler = self
 
-        for i in range(m):
+        for i in range(n, m):
             self.ues[i] = NrUe(0,0,1.5,0, 1.5, i, self)
             self.ues[i].parent_scheduler = self
 
@@ -237,19 +248,19 @@ class Simulation:
         
         best_gnb: NrGnb | None = self.gnbs[0]
         for gnb in self.gnbs.values():
-            tentative_distance: float = euclidean_distance(gnb.position, ue.position)
+            tentative_rsrp: float = rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)
             if self.energy_saving_strategy == GnbSleepModeStrategy.Naive:
-                if tentative_distance <= euclidean_distance(best_gnb.position, ue.position):
+                if tentative_rsrp >= rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power):
                     best_gnb = gnb
             else:
-                if tentative_distance <= euclidean_distance(best_gnb.position, ue.position) and best_gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and best_gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE:
+                if tentative_rsrp >= rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) and best_gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and best_gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE:
                     best_gnb = gnb
 
         if self.energy_saving_strategy != GnbSleepModeStrategy.Naive:
-            if euclidean_distance(best_gnb.position, ue.position) > 250 or best_gnb.radio_unit.advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
+            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < -110 or best_gnb.radio_unit.advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
                 return None
         else:
-            if euclidean_distance(best_gnb.position, ue.position) > 250:
+            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < 110:
                 return None
         
         return best_gnb
@@ -320,8 +331,7 @@ class Simulation:
                     self.set_advanced_sleep_mode(gnb, AdvancedSleepMode.SM1)
 
         self.ue_connection_turtle.clear()
-        self.simulation_statistics_turtle.clear()
-        self.update_component_connection_display()
+        self.update_turtles()
         self.screen.update()
 
         self.time += self.delta

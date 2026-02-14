@@ -7,7 +7,7 @@ from graphics import UE_IMAGE, RU_IMAGE, RU_OFF_IMAGE, GRAPHICAL_SCALING_FACTOR
 from utils import path_loss_los, path_loss_nlos, sinr, se_table
 
 class AdvancedSleepMode(Enum):
-    SM1 = (0.00355, 0.0071,0 )
+    SM1 = (0.00355, 0.0071, 0)
     SM2 = (0.5, 1, 1)
     SM3 = (5, 10, 2)
     SM4 = (500, 1000, 3)

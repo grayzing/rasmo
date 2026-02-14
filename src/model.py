@@ -2,26 +2,66 @@
 from torch_geometric import torch_geometric
 from collections import deque
 from simulation import Simulation
+from nr import AdvancedSleepMode
+
+from enum import Enum
 
 import torch
+
+def AdvancedSleepModeIntMapping(x) -> AdvancedSleepMode:
+    assert x >= 0 and x <= 4
+
+    if x == 0:
+        return AdvancedSleepMode.ACTIVE
+    
+    if x == 1:
+        return AdvancedSleepMode.SM1
+    
+    if x == 2:
+        return AdvancedSleepMode.SM2
+    
+    if x == 3:
+        return AdvancedSleepMode.SM3
+    
+    if x == 4:
+        return AdvancedSleepMode.SM4
+    
+    else:
+        raise IndexError
+    
+    
+
 
 class Critic(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        hidden_size = 16
-        self.convlayers: list[torch_geometric.nn.GCNConv] = [
-            torch_geometric.nn.GCNConv(-1,hidden_size),
+        hidden_size = 64
+        self.convlayers: torch.nn.ModuleList = torch.nn.ModuleList([
+            torch_geometric.nn.GCNConv(6,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size, hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, 1)
-        ]
+        ])
 
-        self.lin = torch_geometric.nn.Linear(hidden_size,1)
+        self.parameter_list = torch.nn.ParameterList(layer.parameters() for layer in self.convlayers)
 
     def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
+        """
+        Calculate value function given the state. Used for TD A2C algorithm
+        
+        :param vertex_features: N + M x 6 vector with node position, ASM (if gNB), PRB utilization (if gNB), and average throughput (if gNB)
+        :type vertex_features: torch.Tensor
+        :param edges: Associations between UEs and gNBs.
+        :type edges: torch.Tensor
+        :param weights: Normalized RSRP between UEs and gNBs.
+        :type weights: torch.Tensor
+        :return: Value function
+        :rtype: Tensor
+        """
         for layer in self.convlayers:
             vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
-            vertex_features = torch.relu(vertex_features)
+            vertex_features = torch.sigmoid(vertex_features)
 
         node_emb = torch_geometric.nn.pool.global_mean_pool(x=vertex_features, batch=None)
         return node_emb
@@ -30,13 +70,16 @@ class Actor(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         hidden_size = 64
-        self.convlayers: list[torch_geometric.nn.GCNConv] = [
+        self.convlayers: torch.nn.ModuleList = torch.nn.ModuleList([
             torch_geometric.nn.GCNConv(6,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size,hidden_size),
+            torch_geometric.nn.GCNConv(hidden_size, hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, hidden_size)
-        ]
+        ])
 
-        self.lin = torch_geometric.nn.Linear(hidden_size,1)
+        self.lin = torch_geometric.nn.Linear(hidden_size,5)
+
+        self.parameter_list = torch.nn.ParameterList(layer.parameters() for layer in self.convlayers)
 
     def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
         torch.autograd.set_detect_anomaly(True)
@@ -45,16 +88,80 @@ class Actor(torch.nn.Module):
             vertex_features = torch.sigmoid(vertex_features)
 
         node_emb: torch.Tensor = self.lin(vertex_features)
-        return torch.softmax(node_emb, 0)
+        return torch.log_softmax(node_emb, 0)
 
-class A2CAgent(torch.nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class A2CAgent:
+    def __init__(self, num_gnbs: int) -> None:
         self.actor = Actor()
         self.critic = Critic()
 
-    def forward(self, vertex_embeddings: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor):
-        policy = self.actor(vertex_embeddings, edges, weights)
-        value = self.critic(vertex_embeddings, edges, weights)
+        self.actor_criterion: torch.nn.MSELoss = torch.nn.MSELoss()
+        self.actor_optimizer: torch.optim.Adam = torch.optim.Adam(self.actor.parameters())
 
+        self.critic_criterion: torch.nn.MSELoss = torch.nn.MSELoss()
+        self.critic_optimizer: torch.optim.Adam = torch.optim.Adam(self.critic.parameters())
+
+        self.num_gnbs = num_gnbs
+        self.gamma = 10e-3
+
+    def td(self, reward: float, value: float) -> torch.Tensor:
+        return torch.tensor(reward + self.gamma * value)
+
+    def train(self, episodes: int = 1000, steps_per_episode: int = 100_000_00):
+        actor_losses: list[float] = []
+        critic_losses: list[float] = []
+        rewards: list[float] = []
+        
+        for e in range(episodes):
+            simulation: Simulation = Simulation(1)
+            simulation.initialize_network(19, 60)
+            simulation.step()
+
+            current_vertex_embeddings, current_edges, current_weights = simulation.get_state()
+
+            for step in range(steps_per_episode):
+                if step % 500 == 0:
+                    self.actor_optimizer.zero_grad()
+                    policy = self.actor(current_vertex_embeddings, current_edges, current_weights)[0:self.num_gnbs]
+                    action = torch.argmax(policy)
+
+                    action_row, action_col = divmod(action.item(), policy.shape[1])
+                    action_row = int(action_row)
+                    action_col = int(action_col)
+
+                    log_prob = policy[action_row][action_col]
+                    
+                    simulation.set_advanced_sleep_mode(simulation.gnbs[action_row], AdvancedSleepModeIntMapping(action_col))
+
+                    for _ in range(499):
+                        simulation.step()
+
+                    reward = simulation.reward()
+
+                    self.critic_optimizer.zero_grad()
+                    value = self.critic(current_vertex_embeddings, current_edges, current_weights)
+
+                    td = self.td(reward, value)
+
+                    critic_loss = self.critic_criterion(td, value)
+                    critic_loss.backward()
+
+                    self.critic_optimizer.step()
+
+                    actor_loss = -log_prob * td.detach()
+                    entropy = -(policy * torch.log(action + 1e-10)).sum()
+                    actor_loss = actor_loss - 0.01 * entropy 
+
+                    actor_loss.backward()
+                    
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
+                    self.actor_optimizer.step()
+
+                    
+                    
+
+
+
+
+        
     
