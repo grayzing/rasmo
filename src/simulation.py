@@ -277,9 +277,11 @@ class Simulation:
         """
         connected_ues = [ue for ue in self.ues.values() if ue.serving_gnb]
         average_rsrp = 0
+        average_average_throughput: float = 0.0
         if len(connected_ues) > 0:
             average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / len([ue for ue in connected_ues])
-        average_average_throughput: float = sum(ue.average_throughput for ue in self.ues.values()) / len(self.ues)
+            average_average_throughput = sum(ue.average_throughput for ue in connected_ues) / len(connected_ues)
+        
         sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values())
         return average_rsrp + average_average_throughput + sleep_mode_sum
     
@@ -295,7 +297,7 @@ class Simulation:
             else:
                 break
 
-        # Handover to gNB with best distance, update instantaneous rate
+        # Handover to gNB with best RSRP, update instantaneous rate
         for ue in self.ues.values():
             ue.update_instantaneous_rate()
             best_gnb: NrGnb | None = self.get_best_gnb(ue)
@@ -313,9 +315,7 @@ class Simulation:
         # Allocate PRBs for attached UEs
         for gnb in self.gnbs.values():
             gnb.allocate()
-            # print(alloc)
                         
-
         # Change UE position based on mobility model
         for ue in self.ues.values():
             if ue.mobility_model == UeMobilityModel.RandomWalk:
@@ -326,7 +326,9 @@ class Simulation:
                 new_position.x = ue.position.x + new_position_dx
                 new_position.y = ue.position.y + new_position_dy
 
+                ue.turtle.clear()
                 ue.set_position(new_position)
+                
 
         if self.energy_saving_strategy == GnbSleepModeStrategy.Control:
             pass
@@ -335,6 +337,9 @@ class Simulation:
                 if len(gnb.connected_ues) == 0 and gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE and gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE:
                     print("Set GNB with id ", gnb.cell_id, " to sleep")
                     self.set_advanced_sleep_mode(gnb, AdvancedSleepMode.SM1)
+        elif self.energy_saving_strategy == GnbSleepModeStrategy.RASM:
+            # Have to wait until the model has been trained
+            pass
 
         self.ue_connection_turtle.clear()
         self.gnb_sleep_mode_turtle.clear()

@@ -16,5 +16,7 @@ We want to maximize the average throughput in the system as well as minimize the
 ## Simulation
 The model is validated in a UMa scenario with eMBB traffic type, i.e., hexagonal grid, 19 macro sites, BS antenna height 25m, 80% of UEs indoors.
 
- The SLS was designed and implemented according to specifications in [Pedersen et. al](https://ieeexplore.ieee.org/document/10482909) and 3GPP.
+The SLS was designed and implemented according to specifications in [Pedersen et. al](https://ieeexplore.ieee.org/document/10482909) and 3GPP.
+
+Agent makes an action once every 500ms
 

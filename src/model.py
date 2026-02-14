@@ -8,6 +8,7 @@ from enum import Enum
 
 import torch
 import pandas as pd
+import numpy as np
 
 def AdvancedSleepModeIntMapping(x) -> AdvancedSleepMode:
     assert x >= 0 and x <= 4
@@ -45,8 +46,6 @@ class Critic(torch.nn.Module):
             torch_geometric.nn.GCNConv(hidden_size, 1)
         ])
 
-        self.parameter_list = torch.nn.ParameterList(layer.parameters() for layer in self.convlayers)
-
     def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
         """
         Calculate value function given the state. Used for TD A2C algorithm
@@ -68,7 +67,7 @@ class Critic(torch.nn.Module):
         return node_emb.squeeze()
 
 class Actor(torch.nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, num_gnbs: int = 19, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         hidden_size = 64
         self.convlayers: torch.nn.ModuleList = torch.nn.ModuleList([
@@ -79,8 +78,7 @@ class Actor(torch.nn.Module):
         ])
 
         self.lin = torch_geometric.nn.Linear(hidden_size,5)
-
-        self.parameter_list = torch.nn.ParameterList(layer.parameters() for layer in self.convlayers)
+        self.num_gnbs = num_gnbs
 
     def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
         torch.autograd.set_detect_anomaly(True)
@@ -88,8 +86,8 @@ class Actor(torch.nn.Module):
             vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
             vertex_features = torch.sigmoid(vertex_features)
 
-        node_emb: torch.Tensor = self.lin(vertex_features)
-        return torch.log_softmax(node_emb, 0)
+        node_emb: torch.Tensor = self.lin(vertex_features)[0:self.num_gnbs]
+        return torch.log_softmax(node_emb.view(-1), 0) # So all elements of the matrix node_emb sum to one. Reshapes the tensor into a flat list
 
 class A2CAgent:
     def __init__(self, num_gnbs: int) -> None:
@@ -110,6 +108,7 @@ class A2CAgent:
 
         self.num_gnbs = num_gnbs # N = num_gnbs by the way
         self.gamma = 0.99 # Discount factor
+        self.entropy = 0.01
 
     def td(self, reward: float, value: float) -> torch.Tensor:
         """
@@ -124,7 +123,7 @@ class A2CAgent:
         """
         return torch.tensor(reward + self.gamma * value).squeeze()
 
-    def train(self, episodes: int = 1000, steps_per_episode: int = 100_0):
+    def train(self, episodes: int = 1000, steps_per_episode: int = 100_000):
         """
         Train the A2C Agent
         
@@ -142,34 +141,44 @@ class A2CAgent:
             simulation.initialize_network(19, 60)
             simulation.step()
 
-            current_vertex_embeddings, current_edges, current_weights = simulation.get_state()
-
             for step in range(steps_per_episode):
                 if step % 500 == 0:
                     self.actor_optimizer.zero_grad()
-                    policy = self.actor(current_vertex_embeddings, current_edges, current_weights)[0:self.num_gnbs] # Probability distribution of actions
-                    action = torch.argmax(policy) # Largest probability action from the num_gnbs x 5 vector returned by policy
 
-                    action_row, action_col = divmod(action.item(), policy.shape[1])
-                    action_row = int(action_row)
-                    action_col = int(action_col)
+                    x, edges, weights = simulation.get_state()
 
-                    log_prob = policy[action_row][action_col] # Don't have to do log since the policy is already log_softmax'ed.
+                    policy = self.actor(x, edges, weights) # Probability distribution of actions
+
+                    action_distribution = torch.distributions.Categorical(policy)
+                    action = action_distribution.sample([1,1]).squeeze() # Largest probability action from the num_gnbs x 5 vector returned by policy
+                    #print(action)
+                    #print(policy)
+                    action_row = int(action.item() // self.num_gnbs)
+                    action_col = int(action.item() % 5)
+                    print(action_row)
+                    print(action_col)
+
+                    log_prob = policy[action] # Don't have to do log since the policy is already log_softmax'ed.
+                    print(log_prob)
                     
                     target_gnb = simulation.gnbs[action_row]
                     advanced_sleep_mode = AdvancedSleepModeIntMapping(action_col)
                     simulation.set_advanced_sleep_mode(target_gnb, advanced_sleep_mode) # Set ASM according to what log_prob tells us
 
-                    while target_gnb.radio_unit.advanced_sleep_mode != advanced_sleep_mode: # Wait for ASM transition to finish.
-                        print("Waiting for ASM transition to complete")
+                    time_to_wait = target_gnb.radio_unit.advanced_sleep_mode.value[0] + advanced_sleep_mode.value[0]
+
+                    for _ in range(int(np.ceil(time_to_wait)) + 1): # Wait for ASM transition to finish.
+                        # print("Waiting for ASM transition to complete")
                         simulation.step()
 
                     reward = simulation.reward() # Calculate reward from the ASM transition. Did QoS diminish, etc.
                     print("Reward: ", reward)
                     rewards.append(reward)
 
+                    next_x, next_edges, next_weights = simulation.get_state()
+
                     self.critic_optimizer.zero_grad()
-                    value = self.critic(current_vertex_embeddings, current_edges, current_weights) # Approximate value from the action
+                    value = self.critic(next_x, next_edges, next_weights) # Approximate value from the action
                     print("Value approximation: ", value)
                     td = self.td(reward, value) # Approximate the advantage function using TD
                     print("TD: ", td)
@@ -180,20 +189,15 @@ class A2CAgent:
 
                     self.critic_optimizer.step()
 
-                    actor_loss = -log_prob * td.detach() # Minimize the loss
-                    entropy = -(policy * torch.log(action + 1e-10)).sum()
-                    actor_loss = actor_loss - 0.01 * entropy 
-
+                    actor_loss = -log_prob * td.detach() - self.entropy # Minimize the loss
                     actor_losses.append(actor_loss.item())
 
                     actor_loss.backward()
                     
                     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
                     self.actor_optimizer.step()
-
-                    simulation.step()
-                    current_vertex_embeddings, current_edges, current_weights = simulation.get_state()
-
+                    
+            simulation.screen.clearscreen()
         # Save the data from training to look at
         concat_data = {
             t : [rewards[t], actor_losses[t], critic_losses[t]] for t in range(len(rewards))
@@ -202,6 +206,9 @@ class A2CAgent:
         data = pd.DataFrame(concat_data, ["Step", "Reward", "Actor Loss", "Critic Loss"])
         data.to_csv("../data/results.csv")
 
+        # Save the models to potentially reuse
+        torch.save(self.critic.state_dict, "../models/critic.pt")
+        torch.save(self.actor.state_dict, "../models/actor.pt")
                     
                     
 
