@@ -105,4 +105,4 @@ def sinr(u: Vector, v: Vector, frequency: float) -> float:
     return 46 - path_loss_los(u,v,frequency) - (-174 + 10*np.log10(20e6))
 
 def rsrp(u: Vector, v: Vector, frequency: float, tx_power: float) -> float:
-    return tx_power - path_loss_los(u,v,frequency)
+    return np.round(tx_power - path_loss_los(u,v,frequency), 3)

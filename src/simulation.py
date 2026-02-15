@@ -74,6 +74,7 @@ class Event:
 
             target_gnb.radio_unit.set_advanced_sleep_mode(advanced_sleep_mode)
             target_gnb.radio_unit.asm_transition_state = AsmTransitionState.DEBO
+
             self.parent.schedule_event(advanced_sleep_mode.value[1], ActionType.AdvancedSleepModeTransitionEnd, args={
                 "target_gnb": target_gnb
             })
@@ -81,24 +82,20 @@ class Event:
             print("Switched ASM of gNB with ID ", target_gnb.cell_id, " to ASM ", advanced_sleep_mode)
         elif self.action == ActionType.AdvancedSleepModeTransitionEnd:
             assert self.args
-
             assert self.args["target_gnb"]
             target_gnb: NrGnb = self.args["target_gnb"]
-
             target_gnb.radio_unit.asm_transition_state = AsmTransitionState.NONE
-            
-            target_gnb.allocate()
         
         print("Executed event with ActionType", self.action, "at time ", self.execution_time)
 
 
 class Simulation:
-    def __init__(self, delta: float = 0.125, energy_saving_strategy: GnbSleepModeStrategy = GnbSleepModeStrategy.Control) -> None:
+    def __init__(self, delta: float = 0.125, energy_saving_strategy: GnbSleepModeStrategy = GnbSleepModeStrategy.Control, graphics=True) -> None:
         self.queue: deque[Event] = deque()
         self.delta: float = delta
         self.gnbs: dict[int, NrGnb] = {}
         self.ues: dict[int, NrUe] = {}
-        self.items = []
+        self.graphics = graphics
 
         self.event_hooks: dict[EventHookType, list[Event]] = {event_hook_type : [] for event_hook_type in EventHookType}
         #self.traffic_generator: EmbbTrafficGenerator = EmbbTrafficGenerator(50_000)
@@ -107,26 +104,27 @@ class Simulation:
 
         self.energy_saving_strategy: GnbSleepModeStrategy = energy_saving_strategy
 
-        self.screen: turtle._Screen = turtle.Screen()
-        self.screen.setup(width=1500,height=1500)
-        self.screen.title("graphdqn testbed")
-        self.screen.tracer(0)
+        if graphics:
+            self.screen: turtle._Screen = turtle.Screen()
+            self.screen.setup(width=1500,height=1500)
+            self.screen.title("graphdqn testbed")
+            self.screen.tracer(0)
 
-        self.screen.register_shape(UE_IMAGE)
-        self.screen.register_shape(RU_IMAGE)
-        self.screen.register_shape(RU_OFF_IMAGE)
+            self.screen.register_shape(UE_IMAGE)
+            self.screen.register_shape(RU_IMAGE)
+            self.screen.register_shape(RU_OFF_IMAGE)
 
-        self.ue_connection_turtle = turtle.Turtle()
-        self.ue_connection_turtle.speed(0)
-        self.ue_connection_turtle.penup()
-        self.ue_connection_turtle.pencolor("blue")
-        self.ue_connection_turtle.hideturtle()
+            self.ue_connection_turtle = turtle.Turtle()
+            self.ue_connection_turtle.speed(0)
+            self.ue_connection_turtle.penup()
+            self.ue_connection_turtle.pencolor("blue")
+            self.ue_connection_turtle.hideturtle()
 
-        self.gnb_sleep_mode_turtle = turtle.Turtle()
-        self.gnb_sleep_mode_turtle.speed(0)
-        self.gnb_sleep_mode_turtle.penup()
-        self.gnb_sleep_mode_turtle.pencolor("green")
-        self.gnb_sleep_mode_turtle.hideturtle()
+            self.gnb_sleep_mode_turtle = turtle.Turtle()
+            self.gnb_sleep_mode_turtle.speed(0)
+            self.gnb_sleep_mode_turtle.penup()
+            self.gnb_sleep_mode_turtle.pencolor("green")
+            self.gnb_sleep_mode_turtle.hideturtle()
 
     def update_turtles(self):
         for ue in self.ues.values() :
@@ -192,7 +190,9 @@ class Simulation:
             return
         tte = advanced_sleep_mode.value[0] + target_gnb.radio_unit.advanced_sleep_mode.value[0] # Time To Execute should include the time it takes to transition to the desired ASM as well as leave the gNB's previous ASM.
         target_gnb.radio_unit.asm_transition_state = AsmTransitionState.TRAN
-        
+        for ue in target_gnb.connected_ues:
+            target_gnb.remove_ue(ue)
+        self.update_turtles()
         self.schedule_event(tte, ActionType.AdvancedSleepModeAdjust, args={
             "advanced_sleep_mode": advanced_sleep_mode,
             "target_gnb": target_gnb
@@ -246,27 +246,16 @@ class Simulation:
         :return: gNB for the UE to be handed off to
         :rtype: NrGnb | None
         """
-        if not self.ues:
-            return
-        
-        best_gnb: NrGnb | None = self.gnbs[0]
-        for gnb in self.gnbs.values():
-            tentative_rsrp: float = rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)
-            if self.energy_saving_strategy == GnbSleepModeStrategy.Naive:
-                if tentative_rsrp >= rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power):
-                    best_gnb = gnb
-            else:
-                if tentative_rsrp >= rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) and best_gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and best_gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE:
-                    best_gnb = gnb
+        active_gnbs = [gnb for gnb in self.gnbs.values() if gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE]
+        best_gnb: NrGnb = active_gnbs[0]
 
-        if self.energy_saving_strategy != GnbSleepModeStrategy.Naive:
-            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < -110 or best_gnb.radio_unit.advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
-                return None
-        else:
-            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < 110:
-                return None
+        for gnb in active_gnbs:
+            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power) and gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE:
+                best_gnb = gnb
         
         return best_gnb
+
+
     
     def reward(self) -> float:
         """
@@ -308,8 +297,6 @@ class Simulation:
                 ue.serving_gnb = best_gnb
                 if best_gnb:
                     best_gnb.connected_ues.append(ue)
-                    if self.energy_saving_strategy == GnbSleepModeStrategy.Naive and best_gnb.radio_unit.advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
-                        self.set_advanced_sleep_mode(best_gnb, AdvancedSleepMode.ACTIVE)
                     print("Attach UE with ID ", ue.id, "to gNB with ID ", best_gnb.cell_id)
 
         # Allocate PRBs for attached UEs
@@ -340,11 +327,12 @@ class Simulation:
         elif self.energy_saving_strategy == GnbSleepModeStrategy.RASM:
             # Have to wait until the model has been trained
             pass
-
-        self.ue_connection_turtle.clear()
-        self.gnb_sleep_mode_turtle.clear()
-        self.update_turtles()
-        self.screen.update()
+        
+        if self.graphics:
+            self.ue_connection_turtle.clear()
+            self.gnb_sleep_mode_turtle.clear()
+            self.update_turtles()
+            self.screen.update()
 
         self.time += self.delta
         

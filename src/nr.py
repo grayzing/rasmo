@@ -7,20 +7,16 @@ from graphics import UE_IMAGE, RU_IMAGE, RU_OFF_IMAGE, GRAPHICAL_SCALING_FACTOR
 from utils import path_loss_los, path_loss_nlos, sinr, se_table
 
 class AdvancedSleepMode(Enum):
-    SM1 = (0.00355, 0.0071, 0)
-    SM2 = (0.5, 1, 1)
-    SM3 = (5, 10, 2)
-    SM4 = (500, 1000, 3)
-    ACTIVE = (0, 0, 4)
-
+    ACTIVE = (0, 0, 0)
+    SM1 = (0.00355, 0.0071, 1)
+    SM2 = (0.5, 1, 2)
+    SM3 = (5, 10, 3)
+    SM4 = (500, 1000, 4)
+    
 class AsmTransitionState(Enum):
     NONE = 0
     TRAN = 1
     DEBO = 2
-
-class KeyPerformanceIndicator(Enum):
-    Rsrp = "Rsrp"
-    Geolocation = "Geolocation"
 
 class UeMobilityModel(Enum):
     ConstantPosition = "ConstantPosition",
@@ -215,6 +211,7 @@ class NrGnb:
         self.ue_scheduler.num_users -= 1
         self.connected_ues.remove(ue)
         self.allocate()
+        ue.assigned_prbs = 0
     
 
 class NrUe:

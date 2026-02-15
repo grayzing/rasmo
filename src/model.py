@@ -151,15 +151,10 @@ class A2CAgent:
 
                     action_distribution = torch.distributions.Categorical(policy)
                     action = action_distribution.sample([1,1]).squeeze() # Largest probability action from the num_gnbs x 5 vector returned by policy
-                    #print(action)
-                    #print(policy)
                     action_row = int(action.item() // self.num_gnbs)
                     action_col = int(action.item() % 5)
-                    print(action_row)
-                    print(action_col)
 
                     log_prob = policy[action] # Don't have to do log since the policy is already log_softmax'ed.
-                    print(log_prob)
                     
                     target_gnb = simulation.gnbs[action_row]
                     advanced_sleep_mode = AdvancedSleepModeIntMapping(action_col)
