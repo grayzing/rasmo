@@ -43,8 +43,9 @@ class Critic(torch.nn.Module):
             torch_geometric.nn.GCNConv(hidden_size,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, hidden_size),
-            torch_geometric.nn.GCNConv(hidden_size, 1)
         ])
+
+        self.readout: torch.nn.Linear = torch.nn.Linear(hidden_size, 1)
 
     def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor, ) -> torch.Tensor:
         """
@@ -61,9 +62,10 @@ class Critic(torch.nn.Module):
         """
         for layer in self.convlayers:
             vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
-            vertex_features = torch.sigmoid(vertex_features)
+            vertex_features = torch.relu(vertex_features)
 
-        node_emb = torch_geometric.nn.pool.global_mean_pool(x=vertex_features, batch=None)
+        global_pool = torch_geometric.nn.pool.global_max_pool(x=vertex_features, batch=None)
+        node_emb = self.readout(global_pool)
         return node_emb.squeeze()
 
 class Actor(torch.nn.Module):

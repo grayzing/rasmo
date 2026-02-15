@@ -271,8 +271,8 @@ class Simulation:
             average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / len([ue for ue in connected_ues])
             average_average_throughput = sum(ue.average_throughput for ue in connected_ues) / len(connected_ues)
         
-        sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values())
-        return average_rsrp + average_average_throughput + sleep_mode_sum
+        sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values()) / (4*len(self.gnbs))
+        return (average_rsrp + average_average_throughput + sleep_mode_sum)/3
     
     def total_energy_usage(self) -> float:
         return sum(gnb.radio_unit.get_power_consumption() for gnb in self.gnbs.values())
