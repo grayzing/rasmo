@@ -318,7 +318,8 @@ class NrUe:
         self.position = position
         self.turtle.setposition(self.position.x/GRAPHICAL_SCALING_FACTOR,self.position.y/GRAPHICAL_SCALING_FACTOR)
 
-        
+def shannon(u: NrGnb, v: NrUe):
+    return 1.44 * np.log2(1 + sinr(u.position, v.position, u.tx_freq))
 
 
 

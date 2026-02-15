@@ -99,10 +99,10 @@ def path_loss_nlos(u: Vector, v: Vector, frequency: float) -> float:
 
 def los_probability(u: Vector, v: Vector) -> float:
     distance_2d: float = euclidean_distance_2d(u,v)
-    return min(18/distance_2d, 1.0) * (1 - np.exp(-distance_2d/36)) + np.exp(-distance_2d/36)
+    return min(18/distance_2d, 1.0) * (1 - np.exp(-distance_2d/36)) + np.exp(-distance_2d/36) # TODO: Implement the probability in calculating NLOS/LOS for pathloss.
 
 def sinr(u: Vector, v: Vector, frequency: float) -> float:
-    return 46 - path_loss_los(u,v,frequency) - (-174 + 10*np.log10(20e6))
+    return 46 - path_loss_los(u,v,frequency) - (-174 + 10*np.log10(20e6)) # TODO: Do a more rigorous calculation of interference from neighboring cells?
 
 def rsrp(u: Vector, v: Vector, frequency: float, tx_power: float) -> float:
     return np.round(tx_power - path_loss_los(u,v,frequency), 3)
