@@ -33,28 +33,29 @@ class QNetwork(torch.nn.Module):
     def __init__(self, num_gnbs: int = 19, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         hidden_size = 64
-        self.convlayers: torch.nn.ModuleList = torch.nn.ModuleList([
+        self.layers: torch.nn.ModuleList = torch.nn.ModuleList([
             torch_geometric.nn.GCNConv(6,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size,hidden_size),
             torch_geometric.nn.GCNConv(hidden_size, hidden_size),
-            torch_geometric.nn.GCNConv(hidden_size, hidden_size)
+            torch_geometric.nn.GCNConv(hidden_size, hidden_size),
+            torch_geometric.nn.Linear(hidden_size,5)
         ])
-
-        self.lin = torch_geometric.nn.Linear(hidden_size,5)
 
         self.num_gnbs = num_gnbs
         self.criterion = torch.nn.MSELoss()
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
 
-    def forward(self, vertex_features: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         torch.autograd.set_detect_anomaly(True)
-        for layer in self.convlayers:
-            vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
-            vertex_features = torch.sigmoid(vertex_features)
-
-        node_emb: torch.Tensor = self.lin(vertex_features)[0:self.num_gnbs]
-        node_emb[self.num_gnbs:] = -np.inf #Action clipping Nr UEs (don't have to put these in advanced sleep modes)
-        return node_emb
+        vertex_features = x
+        for layer in self.layers:
+            if isinstance(layer, torch_geometric.nn.GCNConv):
+                vertex_features = layer(x=vertex_features, edge_index=edges, edge_weight=weights)
+                vertex_features = torch.nn.functional.leaky_relu(vertex_features)
+            else:
+                vertex_features = layer(vertex_features)
+                vertex_features[self.num_gnbs:] = -torch.inf #Action clipping Nr UEs (don't have to put these in advanced sleep modes)
+        return vertex_features
     
 class StateContainer:
     def __init__(self, x: torch.Tensor, edges: torch.Tensor, weights: torch.Tensor) -> None:
@@ -65,16 +66,25 @@ class StateContainer:
 class ReplayBuffer:
     def __init__(self) -> None:
         self.buffer_size = 20_000
-        self.buffer: deque[tuple[StateContainer, int, float, StateContainer]] = deque()
+        self.buffer: deque[tuple[StateContainer, int, float, StateContainer]] = deque(maxlen=self.buffer_size)
     
     def add_experience(self, experience: tuple[StateContainer, int, float, StateContainer]) -> None:
         self.buffer.appendleft(experience)
 
     def sample(self, batch_size: int) -> list:
         return sample(self.buffer, batch_size)
+    
+    def __sizeof__(self) -> int:
+        return len(self.buffer)
 
 class Agent:
     def __init__(self, num_gnbs = 19, num_ues = 190) -> None:
+        """
+        Deep Q Learning Agent
+        
+        :param num_gnbs: Number of gNBs for it to train with
+        :param num_ues: Number of UEs in simulation
+        """
         self.num_gnbs: int = num_gnbs
         self.num_ues: int = num_ues
 
@@ -91,9 +101,20 @@ class Agent:
         self.kpis: list[tuple[float,float]] = []
 
     def generate_random_action(self) -> tuple[int,int]:
+        """
+        Generate a random gNB and ASM
+        
+        :return: ID of gNB, index of ASM
+        :rtype: tuple[int, int]
+        """
         return(randint(0,self.num_gnbs-1), randint(0,4))
 
     def train(self, episodes) -> None:
+        """
+        Train the Deep-Q Learning Agent. Periodically saves relevant KPIs to ../data/ and the resulting model is saved to ../models/
+        
+        :param episodes: Number of episodes to train agent for
+        """
         for e in range(episodes):
             losses: list[float] = []
             rewards: list[float] = []
@@ -104,7 +125,7 @@ class Agent:
 
             for t in range(1000):
                 simulation.step()
-                if t % 50 == 0:
+                if t % 1 == 0:
                     x, edges, weights = simulation.get_state()
                     
                     # Epsilon-Greedy Strategy
@@ -117,7 +138,7 @@ class Agent:
                         target_gnb = simulation.gnbs[gnb_id]
                         sleep_mode = AdvancedSleepModeIntMapping(asm_id)
 
-                        action = self.num_gnbs * gnb_id + asm_id
+                        action = 5 * gnb_id + asm_id
                     else:
                         q_values: torch.Tensor = self.q(x, edges, weights)
 
@@ -139,9 +160,10 @@ class Agent:
                     
                     simulation.set_advanced_sleep_mode(target_gnb, sleep_mode)
 
-                    while target_gnb.radio_unit.asm_transition_state != AsmTransitionState.NONE and target_gnb.radio_unit.advanced_sleep_mode != sleep_mode: # Wait for the gNB to enter the desired sleep mode before we make calculations
+                    while target_gnb.radio_unit.advanced_sleep_mode != sleep_mode: # Wait for the gNB to enter the desired sleep mode before we make calculations
                         simulation.step()
                 
+                    simulation.step()
                     next_x, next_edges, next_weights = simulation.get_state()
                     reward = simulation.reward()
                     print("Reward, ", reward)
@@ -157,19 +179,21 @@ class Agent:
                     self.replay_buffer.add_experience(state_memory)
 
                     # Replay Learning Portion
-                    if len(self.replay_buffer.buffer) >= self.batch_size:
-                        sample = self.replay_buffer.sample(self.batch_size)
+                    sample = self.replay_buffer.sample(
+                        min(self.batch_size, self.replay_buffer.__sizeof__())
+                    )
 
-                        for experience in sample:
-                            e_state, e_action, e_reward, e_next_state = experience
-                            td_target = e_reward + (t != 999) * (self.gamma * torch.max(self.q_target(e_next_state.x,e_next_state.edges,e_next_state.weights)).item())
-                            former_q_estimate = self.q(e_state.x, e_state.edges, e_state.weights)[e_action].item()
-                            q_loss = self.q.criterion(td_target, former_q_estimate)
+                    for experience in sample:
+                        e_state, e_action, e_reward, e_next_state = experience
+                        max_q = torch.max(self.q_target(x=e_next_state.x,edges=e_next_state.edges,weights=e_next_state.weights).view(-1))
+                        td_target = e_reward + (t != 999) * (self.gamma * max_q)
+                        former_q_estimate = self.q(x=e_state.x, edges=e_state.edges, weights=e_state.weights).view(-1)[e_action]
+                        q_loss = self.q.criterion(td_target, former_q_estimate)
 
-                            losses.append(q_loss)
-                            print("Loss: ", q_loss)
-                            q_loss.backward()
-                            self.q.optimizer.step()
+                        losses.append(q_loss)
+                        print("Loss: ", q_loss.item())
+                        q_loss.backward()
+                        self.q.optimizer.step()
         
                     # Every C steps update the target network to be the current network
                     if t % self.target_network_update == 0:
