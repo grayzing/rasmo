@@ -92,7 +92,7 @@ class Actor(torch.nn.Module):
         return node_emb.view(-1) # Reshapes the tensor into a flat list
 
 class A2CAgent:
-    def __init__(self, num_gnbs: int) -> None:
+    def __init__(self, num_gnbs: int, num_ues: int) -> None:
         """
         Initialize Advantage Actor Critic agent.
         
@@ -108,6 +108,7 @@ class A2CAgent:
         self.critic_optimizer: torch.optim.Adam = torch.optim.Adam(self.critic.parameters())
 
         self.num_gnbs = num_gnbs # N = num_gnbs by the way
+        self.num_ues = num_ues
         self.gamma = 0.99 # Discount factor
         self.entropy = 0.01
 
@@ -142,7 +143,7 @@ class A2CAgent:
         
         for e in range(episodes):
             simulation: Simulation = Simulation(1)
-            simulation.initialize_network(19, 60)
+            simulation.initialize_network(19, self.num_ues)
             simulation.step()
 
             for step in range(steps_per_episode):
@@ -152,6 +153,7 @@ class A2CAgent:
                     x, edges, weights = simulation.get_state()
 
                     policy = self.actor(x, edges, weights) # Logits for the possible actions
+                    value_curr = self.critic(x, edges, weights) 
 
                     action_distribution = torch.distributions.Categorical(logits=policy)
                     action = action_distribution.sample([1,1]).squeeze() # Sample random action from the distribution
@@ -163,8 +165,6 @@ class A2CAgent:
                     target_gnb = simulation.gnbs[action_row]
                     advanced_sleep_mode = AdvancedSleepModeIntMapping(action_col)
                     simulation.set_advanced_sleep_mode(target_gnb, advanced_sleep_mode) # Set ASM according to what log_prob tells us
-
-                    value_curr = self.critic(x, edges, weights) 
 
                     time_to_wait = target_gnb.radio_unit.advanced_sleep_mode.value[0] + advanced_sleep_mode.value[0]
 
@@ -192,7 +192,9 @@ class A2CAgent:
 
                     self.critic_optimizer.step()
 
-                    actor_loss = self.actor_loss(log_prob, critic_loss) # Minimize the loss
+                    advantage = td - value_curr
+
+                    actor_loss = self.actor_loss(log_prob, advantage) # Minimize the loss
                     print("Actor Loss: ", actor_loss.item())
                     actor_losses.append(actor_loss.item())
 

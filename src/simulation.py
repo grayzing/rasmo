@@ -95,6 +95,7 @@ class Simulation:
         self.delta: float = delta
         self.gnbs: dict[int, NrGnb] = {}
         self.ues: dict[int, NrUe] = {}
+
         self.graphics = graphics
 
         self.event_hooks: dict[EventHookType, list[Event]] = {event_hook_type : [] for event_hook_type in EventHookType}
@@ -233,8 +234,9 @@ class Simulation:
         for i in range(7, 19):
             self.gnbs[i].position = Vector(np.cos(np.deg2rad(30 * i)) * 500, np.sin(np.deg2rad(30 * i)) * 500, 25)
 
-        for i in range(len(self.gnbs)):
-            self.gnbs[i].turtle.setposition(self.gnbs[i].position.x/GRAPHICAL_SCALING_FACTOR,self.gnbs[i].position.y/GRAPHICAL_SCALING_FACTOR)
+        if self.graphics:
+            for i in range(len(self.gnbs)):
+                self.gnbs[i].turtle.setposition(self.gnbs[i].position.x/GRAPHICAL_SCALING_FACTOR,self.gnbs[i].position.y/GRAPHICAL_SCALING_FACTOR)
 
 
     def get_best_gnb(self, ue: NrUe) -> NrGnb | None:
@@ -268,11 +270,11 @@ class Simulation:
         average_rsrp = 0
         average_average_throughput: float = 0.0
         if len(connected_ues) > 0:
-            average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / len([ue for ue in connected_ues])
+            average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / (len([ue for ue in connected_ues]) * 35 * len(connected_ues))
             average_average_throughput = sum(ue.average_throughput for ue in connected_ues) / len(connected_ues)
         
         sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values()) / (4*len(self.gnbs))
-        return (average_rsrp + average_average_throughput + sleep_mode_sum)/3
+        return (average_rsrp + average_average_throughput + sleep_mode_sum)
     
     def total_energy_usage(self) -> float:
         return sum(gnb.radio_unit.get_power_consumption() for gnb in self.gnbs.values())
@@ -297,7 +299,7 @@ class Simulation:
                 ue.serving_gnb = best_gnb
                 if best_gnb:
                     best_gnb.connected_ues.append(ue)
-                    print("Attach UE with ID ", ue.id, "to gNB with ID ", best_gnb.cell_id)
+                    # print("Attach UE with ID ", ue.id, "to gNB with ID ", best_gnb.cell_id)
 
         # Allocate PRBs for attached UEs
         for gnb in self.gnbs.values():
@@ -331,6 +333,7 @@ class Simulation:
         if self.graphics:
             self.ue_connection_turtle.clear()
             self.gnb_sleep_mode_turtle.clear()
+
             self.update_turtles()
             self.screen.update()
 
