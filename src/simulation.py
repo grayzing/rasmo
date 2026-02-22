@@ -7,13 +7,33 @@ import numpy as np
 import torch
 
 from nr import NrUe, NrGnb, AdvancedSleepMode, UeMobilityModel, AsmTransitionState
-from utils import Vector, euclidean_distance, rsrp
+from utils import Vector, euclidean_distance, rsrp, isd, rsrp_bound, propagation_delay
 
 from graphics import UE_IMAGE, RU_IMAGE, RU_OFF_IMAGE, GRAPHICAL_SCALING_FACTOR
 
 from warnings import warn
 
 time_difference_tolerance: float = 1
+
+class EmbbTrafficGenerator:
+    def __init__(self, simulation: 'Simulation', packet_size: int, rate: int = 20) -> None:
+        self.packet_size = packet_size
+        self.simulation: Simulation = simulation
+
+    def generate_packet(self, source_gnb: NrGnb, target_ue: NrUe):
+
+        p_delay = propagation_delay(target_ue.position, source_gnb.position)
+        t_delay = self.packet_size / (target_ue.assigned_prbs * 1440 * np.log2(1 + rsrp(source_gnb.position, target_ue.position, source_gnb.tx_freq, source_gnb.tx_power) / -113.9) / 10e3)
+        q_delay = 0
+
+        total_delay = p_delay + t_delay + q_delay
+
+        self.simulation.schedule_event(total_delay, ActionType.FtpPacketReceive, args={
+            "packet_size": self.packet_size,
+            "source_gnb": source_gnb,
+            "target_ue": target_ue,
+            "total_delay": total_delay
+        })
 
 class ActionType(Enum):
     NrHandover = "NrHandover"
@@ -50,13 +70,19 @@ class Event:
 
             assert self.args["destination_ue"]
             assert self.args["source_gnb"]
-            assert self.args["packet"]    
+            assert self.args["packet_size"]    
 
             #packet: Packet = self.args["packet"]
             source_gnb: NrGnb = self.args["source_gnb"]
-            destination_ue: NrUe = self.args["destination_ue"]
+            target_ue: NrUe = self.args["destination_ue"]
+            packet_size: int = self.args["packet_size"]
+            total_delay: float = self.args["total_delay"]
 
-            print("Packet received from gnb ", source_gnb.cell_id, " by UE ", destination_ue.id)
+            # Update UE instantaneous throughput
+            target_ue.instantaneous_throughput = packet_size / total_delay
+
+            print("Packet received from gnb ", source_gnb.cell_id, " by UE ", target_ue.id)
+            print("UE with id ", target_ue.id, " instantaneous throughput updated to ", target_ue.instantaneous_throughput)
 
         elif self.action == ActionType.AdvancedSleepModeAdjust:
             assert self.args
@@ -67,10 +93,11 @@ class Event:
             advanced_sleep_mode: AdvancedSleepMode = self.args["advanced_sleep_mode"]
             target_gnb: NrGnb = self.args["target_gnb"]
 
-            if advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
-                target_gnb.turtle.shape(RU_OFF_IMAGE)
-            else:
-                target_gnb.turtle.shape(RU_IMAGE)
+            if self.parent.graphics:
+                if advanced_sleep_mode != AdvancedSleepMode.ACTIVE:
+                    target_gnb.turtle.shape(RU_OFF_IMAGE)
+                else:
+                    target_gnb.turtle.shape(RU_IMAGE)
 
             target_gnb.radio_unit.set_advanced_sleep_mode(advanced_sleep_mode)
             target_gnb.radio_unit.asm_transition_state = AsmTransitionState.DEBO
@@ -95,11 +122,8 @@ class Simulation:
         self.delta: float = delta
         self.gnbs: dict[int, NrGnb] = {}
         self.ues: dict[int, NrUe] = {}
-
         self.graphics = graphics
-
-        self.event_hooks: dict[EventHookType, list[Event]] = {event_hook_type : [] for event_hook_type in EventHookType}
-        #self.traffic_generator: EmbbTrafficGenerator = EmbbTrafficGenerator(50_000)
+        self.traffic_generator: EmbbTrafficGenerator = EmbbTrafficGenerator(self, 4*10**6, 10)
 
         self.time = 0
 
@@ -162,18 +186,20 @@ class Simulation:
         v: list[list[float]] = []
 
         for gnb in self.gnbs.values():
-            prb_utilization = sum(prb for prb in gnb.allocate().values()) / gnb.ue_scheduler.total_prbs
-            average_throughput = 1
+            # Build feature vector
+            average_instant_throughput = -1
             if len(gnb.connected_ues) > 0:
-                average_throughput = sum(ue.average_throughput for ue in gnb.connected_ues) / len(gnb.connected_ues)
-            v.append([gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], prb_utilization, average_throughput])
+                average_instant_throughput = sum([ue.instantaneous_throughput for ue in gnb.connected_ues]) / len(gnb.connected_ues)
+            v.append([gnb.position.x, gnb.position.y, gnb.position.z, gnb.radio_unit.advanced_sleep_mode.value[2], average_instant_throughput])
+
+            # Build edge vector
             for ue in gnb.connected_ues:
                 source.append(gnb.cell_id)
                 destination.append(ue.id)
-                w.append(rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)/-160)
+                w.append(rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)/gnb.tx_power)
 
         for ue in self.ues.values():
-            v.append([ue.position.x, ue.position.y, ue.position.z, -1, -1, -1])
+            v.append([ue.position.x, ue.position.y, ue.position.z, -1, -1])
 
         feature_vector: torch.Tensor = torch.tensor(v, dtype=torch.float32)
         edge_vector: torch.Tensor = torch.tensor([source, destination], dtype=torch.int)
@@ -193,7 +219,8 @@ class Simulation:
         target_gnb.radio_unit.asm_transition_state = AsmTransitionState.TRAN
         for ue in target_gnb.connected_ues:
             target_gnb.remove_ue(ue)
-        self.update_turtles()
+        if self.graphics:
+            self.update_turtles()
         self.schedule_event(tte, ActionType.AdvancedSleepModeAdjust, args={
             "advanced_sleep_mode": advanced_sleep_mode,
             "target_gnb": target_gnb
@@ -210,12 +237,11 @@ class Simulation:
         """
 
         for i in range(n):
-            self.gnbs[i] = NrGnb(0,0,25,25,i,self)
+            self.gnbs[i] = NrGnb(0,0,10,10,i,self)
             self.gnbs[i].parent_scheduler = self
 
         for i in range(n, m):
             self.ues[i] = NrUe(0,0,1.5,0, 1.5, i, self)
-            self.ues[i].parent_scheduler = self
 
             if np.random.randint(0,2) == 0:
                 self.ues[i].velocity.x *= -1
@@ -229,10 +255,10 @@ class Simulation:
         self.gnbs[0].position = Vector(0,0,25)
 
         for i in range(1,7):
-            self.gnbs[i].position = Vector(np.cos(np.deg2rad(60 * i)) * 250, np.sin(np.deg2rad(60 * i)) * 250, 25)
+            self.gnbs[i].position = Vector(np.cos(np.deg2rad(60 * i)) * isd, np.sin(np.deg2rad(60 * i)) * isd, 25)
 
         for i in range(7, 19):
-            self.gnbs[i].position = Vector(np.cos(np.deg2rad(30 * i)) * 500, np.sin(np.deg2rad(30 * i)) * 500, 25)
+            self.gnbs[i].position = Vector(np.cos(np.deg2rad(30 * i)) * (isd * 2), np.sin(np.deg2rad(30 * i)) * (isd * 2), 25)
 
         if self.graphics:
             for i in range(len(self.gnbs)):
@@ -252,9 +278,12 @@ class Simulation:
         best_gnb: NrGnb = active_gnbs[0]
 
         for gnb in active_gnbs:
-            if rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power) < rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power) and gnb.radio_unit.advanced_sleep_mode == AdvancedSleepMode.ACTIVE and gnb.radio_unit.asm_transition_state == AsmTransitionState.NONE:
+            r = rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)
+            # print(r)
+            if r > rsrp(best_gnb.position, ue.position, best_gnb.tx_freq, best_gnb.tx_power):
                 best_gnb = gnb
         
+        # print("Best gnb: ", best_gnb.cell_id)
         return best_gnb
 
 
@@ -267,14 +296,25 @@ class Simulation:
         :rtype: float
         """
         connected_ues = [ue for ue in self.ues.values() if ue.serving_gnb]
-        average_rsrp = 0
-        average_average_throughput: float = 0.0
-        if len(connected_ues) > 0:
-            average_rsrp: float = sum(ue.rsrp() for ue in connected_ues) / (len([ue for ue in connected_ues]) * 35 * len(connected_ues))
-            average_average_throughput = sum(ue.average_throughput for ue in connected_ues) / len(connected_ues)
-        
-        sleep_mode_sum = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values()) / (4*len(self.gnbs))
-        return (average_rsrp + average_average_throughput + sleep_mode_sum)
+        rsrp_reward = 0
+        ue_connection_reward = 0
+        for gnb in self.gnbs.values():
+            k = len(gnb.connected_ues)
+            if k >= 66:
+                ue_connection_reward = -2
+                break
+        if ue_connection_reward == 0:
+            ue_connection_reward = 4
+        for ue in connected_ues:
+            r = ue.rsrp()
+            if r < rsrp_bound:
+                rsrp_reward = -4
+                break
+        if rsrp_reward == 0:
+            rsrp_reward = 6
+
+        sleep_mode_average = sum(gnb.radio_unit.advanced_sleep_mode.value[2] for gnb in self.gnbs.values()) / (4*len(self.gnbs))
+        return rsrp_reward + sleep_mode_average + ue_connection_reward
     
     def total_energy_usage(self) -> float:
         return sum(gnb.radio_unit.get_power_consumption() for gnb in self.gnbs.values())
@@ -290,7 +330,6 @@ class Simulation:
 
         # Handover to gNB with best RSRP, update instantaneous rate
         for ue in self.ues.values():
-            ue.update_instantaneous_rate()
             best_gnb: NrGnb | None = self.get_best_gnb(ue)
 
             if best_gnb != ue.serving_gnb:
@@ -301,7 +340,7 @@ class Simulation:
                     best_gnb.connected_ues.append(ue)
                     # print("Attach UE with ID ", ue.id, "to gNB with ID ", best_gnb.cell_id)
 
-        # Allocate PRBs for attached UEs
+        # Allocate PRBs for attached UEs in Round Robin fashion
         for gnb in self.gnbs.values():
             gnb.allocate()
                         
@@ -314,10 +353,16 @@ class Simulation:
                 
                 new_position.x = ue.position.x + new_position_dx
                 new_position.y = ue.position.y + new_position_dy
-
-                ue.turtle.clear()
-                ue.set_position(new_position)
                 
+                if self.graphics:
+                    ue.turtle.clear()
+                ue.set_position(new_position)
+
+        # Send FTP packet downlink to UEs
+        if self.time % 1000 == 0:
+            for gnb in self.gnbs.values():
+                for ue in gnb.connected_ues:
+                    self.traffic_generator.generate_packet(gnb, ue)  
 
         if self.energy_saving_strategy == GnbSleepModeStrategy.Control:
             pass
@@ -350,6 +395,21 @@ class Simulation:
             self.step()
             time += self.delta
             self.time = time
+
+    def total_interference(self, ue: NrUe, gnb_space: list[NrGnb]) -> float:
+        """
+        Calculate total interference experienced by UE ue.
+        Used for SINR calculation
+        
+        :param ue: UE to calculate interference for
+        :type u: NrUe
+        :return: Total interference experience by UE ue.
+        :rtype: float
+        """
+        interference = 0.0
+        for gnb in gnb_space:
+            interference += 1 * rsrp(gnb.position, ue.position, gnb.tx_freq, gnb.tx_power)
+        return interference
 
 
     

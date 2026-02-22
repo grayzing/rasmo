@@ -116,16 +116,18 @@ class Agent:
         :param episodes: Number of episodes to train agent for
         """
         for e in range(episodes):
+            print("Episode: ", e)
             losses: list[float] = []
             rewards: list[float] = []
 
-            simulation: Simulation = Simulation(1)
+            simulation: Simulation = Simulation(1, graphics=False)
             simulation.initialize_network(19, self.num_ues)
             simulation.step()
 
-            for t in range(1000):
+            while simulation.time < 3000:
+                print("Time: ", simulation.time)
                 simulation.step()
-                if t % 1 == 0:
+                if simulation.time % 50 == 0:
                     x, edges, weights = simulation.get_state()
                     
                     # Epsilon-Greedy Strategy
@@ -163,7 +165,6 @@ class Agent:
                     while target_gnb.radio_unit.advanced_sleep_mode != sleep_mode: # Wait for the gNB to enter the desired sleep mode before we make calculations
                         simulation.step()
                 
-                    simulation.step()
                     next_x, next_edges, next_weights = simulation.get_state()
                     reward = simulation.reward()
                     print("Reward, ", reward)
@@ -186,23 +187,22 @@ class Agent:
                     for experience in sample:
                         e_state, e_action, e_reward, e_next_state = experience
                         max_q = torch.max(self.q_target(x=e_next_state.x,edges=e_next_state.edges,weights=e_next_state.weights).view(-1))
-                        td_target = e_reward + (t != 999) * (self.gamma * max_q)
+                        td_target = e_reward + (simulation.time != 2999) * (self.gamma * max_q)
                         former_q_estimate = self.q(x=e_state.x, edges=e_state.edges, weights=e_state.weights).view(-1)[e_action]
                         q_loss = self.q.criterion(td_target, former_q_estimate)
 
                         losses.append(q_loss)
-                        print("Loss: ", q_loss.item())
                         q_loss.backward()
                         self.q.optimizer.step()
         
                     # Every C steps update the target network to be the current network
-                    if t % self.target_network_update == 0:
+                    if simulation.time % self.target_network_update == 0:
                         self.q_target.load_state_dict(self.q.state_dict())
 
                     self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay_factor) #Epsilon decay
 
-            simulation.screen.clearscreen()
-
+            # simulation.screen.clearscreen()
+            print("Episode ended")
             if len(losses) > 0:
                 avg_loss = sum(losses) / len(losses)
                 avg_reward = sum(rewards) / len(rewards)
